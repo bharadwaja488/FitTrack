@@ -12,7 +12,9 @@ The application allows users to manage their basic health information and record
 - Update user information
 - Delete user
 - Calculate BMI
-- Calculate estimated daily calorie requirement
+- Calculate estimated maintenance calories
+- Select a weight-loss or weight-gain goal when adding or updating a user
+- Calculate and display an estimated goal-based calorie target (maintenance calories ± 500 kcal)
 - Add fitness records
 - View all fitness records
 - View fitness records for a specific user
@@ -43,7 +45,9 @@ Stores:
 - Height
 - Weight
 - BMI
-- Estimated daily calories
+- Estimated maintenance calories
+- Fitness goal (`maintenance` for existing users until a goal is selected)
+- Goal calorie target
 
 #### fitness_records
 

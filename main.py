@@ -29,6 +29,18 @@ def add_user():
             print("\nWeight must be greater than 0.")
             return
 
+        print("\nChoose your fitness goal:")
+        print("1. Weight Loss")
+        print("2. Weight Gain")
+        goal_choice = input("Enter your choice (1/2): ").strip()
+        if goal_choice == "1":
+            goal = "weight_loss"
+        elif goal_choice == "2":
+            goal = "weight_gain"
+        else:
+            print("\nInvalid goal choice. Please select 1 or 2.")
+            return
+
     except ValueError:
         print("\nPlease enter valid numbers.")
         return
@@ -45,16 +57,24 @@ def add_user():
     else:
         bmr = (10 * weight) + (6.25 * height_cm) - (5 * age) - 161
 
-    # Estimate daily calories
+    # Estimate maintenance calories using a sedentary activity multiplier.
     daily_calories = bmr * 1.2
+    # Illustrative goal adjustment; actual needs vary by person.
+    calorie_adjustment = 500
+    target_calories = (
+        daily_calories - calorie_adjustment
+        if goal == "weight_loss"
+        else daily_calories + calorie_adjustment
+    )
 
     connection = create_connection()
     cursor = connection.cursor()
 
     query = """
         INSERT INTO users
-        (name, age, gender, height, weight, bmi, daily_calories)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        (name, age, gender, height, weight, bmi, daily_calories,
+         goal, target_calories)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
     """
 
     values = (
@@ -64,7 +84,9 @@ def add_user():
         height,
         weight,
         bmi,
-        daily_calories
+        daily_calories,
+        goal,
+        target_calories
     )
 
     cursor.execute(query, values)
@@ -72,7 +94,9 @@ def add_user():
 
     print("\nUser added successfully!")
     print("BMI:", round(bmi, 2))
-    print("Estimated Daily Calories:", round(daily_calories))
+    print("Maintenance Calories:", round(daily_calories))
+    print("Fitness Goal:", goal.replace("_", " ").title())
+    print("Goal Calorie Target:", round(target_calories))
 
     cursor.close()
     connection.close()
@@ -86,19 +110,33 @@ def view_users():
     connection = create_connection()
     cursor = connection.cursor()
 
-    query = "SELECT * FROM users"
+    query = """
+        SELECT user_id, name, age, gender, height, weight,
+               daily_calories, goal, target_calories
+        FROM users
+        ORDER BY user_id
+    """
     cursor.execute(query)
-
     users = cursor.fetchall()
 
     if not users:
         print("\nNo users found.")
-
     else:
         print("\n===== All Users =====")
-
+        print(
+            f"{'ID':<5}{'Username':<18}{'Age':<6}{'Gender':<10}"
+            f"{'Height(m)':<12}{'Weight(kg)':<13}{'Maintain kcal':<16}"
+            f"{'Goal':<15}{'Target kcal':<12}"
+        )
+        print("-" * 107)
         for user in users:
-            print(user)
+            user_id, name, age, gender, height, weight, maintenance, goal, target = user
+            print(
+                f"{user_id:<5}{name:<18}{age:<6}{gender:<10}"
+                f"{float(height):<12.2f}{float(weight):<13.2f}"
+                f"{float(maintenance):<16.0f}"
+                f"{goal.replace('_', ' ').title():<15}{float(target):<12.0f}"
+            )
 
     cursor.close()
     connection.close()
@@ -138,7 +176,9 @@ def search_user():
         print("Height:", user[4], "m")
         print("Weight:", user[5], "kg")
         print("BMI:", round(user[6], 2))
-        print("Daily Calories:", round(user[7]))
+        print("Maintenance Calories:", round(user[7]))
+        print("Fitness Goal:", user[8].replace("_", " ").title())
+        print("Goal Calorie Target:", round(user[9]) if user[9] is not None else "Not set")
 
     else:
         print("\nUser not found.")
@@ -177,6 +217,18 @@ def update_user():
             print("\nWeight must be greater than 0.")
             return
 
+        print("\nChoose your fitness goal:")
+        print("1. Weight Loss")
+        print("2. Weight Gain")
+        goal_choice = input("Enter your choice (1/2): ").strip()
+        if goal_choice == "1":
+            goal = "weight_loss"
+        elif goal_choice == "2":
+            goal = "weight_gain"
+        else:
+            print("\nInvalid goal choice. Please select 1 or 2.")
+            return
+
     except ValueError:
         print("\nPlease enter valid values.")
         return
@@ -193,8 +245,14 @@ def update_user():
     else:
         bmr = (10 * weight) + (6.25 * height_cm) - (5 * age) - 161
 
-    # Calculate estimated calories
+    # Estimate maintenance calories using a sedentary activity multiplier.
     daily_calories = bmr * 1.2
+    calorie_adjustment = 500
+    target_calories = (
+        daily_calories - calorie_adjustment
+        if goal == "weight_loss"
+        else daily_calories + calorie_adjustment
+    )
 
     connection = create_connection()
     cursor = connection.cursor()
@@ -207,7 +265,9 @@ def update_user():
             height = %s,
             weight = %s,
             bmi = %s,
-            daily_calories = %s
+            daily_calories = %s,
+            goal = %s,
+            target_calories = %s
         WHERE user_id = %s
     """
 
@@ -219,6 +279,8 @@ def update_user():
         weight,
         bmi,
         daily_calories,
+        goal,
+        target_calories,
         user_id
     )
 
@@ -229,7 +291,9 @@ def update_user():
 
         print("\nUser updated successfully!")
         print("New BMI:", round(bmi, 2))
-        print("New Estimated Daily Calories:", round(daily_calories))
+        print("New Maintenance Calories:", round(daily_calories))
+        print("New Fitness Goal:", goal.replace("_", " ").title())
+        print("New Goal Calorie Target:", round(target_calories))
 
     else:
         print("\nUser not found.")
