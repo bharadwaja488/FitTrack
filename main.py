@@ -1,4 +1,23 @@
 from database import create_connection
+from math import isfinite
+
+
+def _read_number(prompt, label, minimum, maximum, integer=False):
+    raw = input(prompt).strip()
+    try:
+        value = int(raw) if integer else float(raw)
+    except ValueError:
+        kind = "a whole number" if integer else "a number"
+        raise ValueError(f"{label} must be {kind}.")
+    try:
+        finite = isfinite(float(value))
+    except OverflowError:
+        finite = False
+    if not finite:
+        raise ValueError(f"{label} must be a finite number.")
+    if value < minimum or value > maximum:
+        raise ValueError(f"{label} must be between {minimum} and {maximum}.")
+    return value
 
 
 # ==========================================
@@ -9,28 +28,18 @@ def add_user():
     try:
         name = input("Enter your name: ").strip()
 
-        age = int(input("Enter your age: "))
-
-        if age <= 0:
-            print("\nAge must be greater than 0.")
-            return
+        age = _read_number("Enter your age: ", "Age", 1, 120, integer=True)
 
         gender = input("Enter your gender: ").strip()
-
-        height = float(input("Enter your height in meters: "))
-
-        if height <= 0:
-            print("\nHeight must be greater than 0.")
+        if gender.lower() not in {"male", "female"}:
+            print("\nGender must be Male or Female.")
             return
 
-        weight = float(input("Enter your weight in kg: "))
+        height = _read_number("Enter your height in meters: ", "Height", 0.01, 3)
+        weight = _read_number("Enter your weight in kg: ", "Weight", 1, 500)
 
-        if weight <= 0:
-            print("\nWeight must be greater than 0.")
-            return
-
-    except ValueError:
-        print("\nPlease enter valid numbers.")
+    except ValueError as error:
+        print(f"\n{error}")
         return
 
     # Calculate BMI
@@ -157,28 +166,17 @@ def update_user():
 
         name = input("Enter new name: ").strip()
 
-        age = int(input("Enter new age: "))
-
-        if age <= 0:
-            print("\nAge must be greater than 0.")
-            return
+        age = _read_number("Enter new age: ", "Age", 1, 120, integer=True)
 
         gender = input("Enter new gender: ").strip()
-
-        height = float(input("Enter new height in meters: "))
-
-        if height <= 0:
-            print("\nHeight must be greater than 0.")
+        if gender.lower() not in {"male", "female"}:
+            print("\nGender must be Male or Female.")
             return
+        height = _read_number("Enter new height in meters: ", "Height", 0.01, 3)
+        weight = _read_number("Enter new weight in kg: ", "Weight", 1, 500)
 
-        weight = float(input("Enter new weight in kg: "))
-
-        if weight <= 0:
-            print("\nWeight must be greater than 0.")
-            return
-
-    except ValueError:
-        print("\nPlease enter valid values.")
+    except ValueError as error:
+        print(f"\n{error}")
         return
 
     # Calculate BMI
@@ -250,60 +248,75 @@ def delete_user():
         print("\nPlease enter a valid user ID.")
         return
 
-    connection = create_connection()
-    cursor = connection.cursor()
+    conn = create_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT * FROM users WHERE user_id = %s", (user_id,))
+        user = cursor.fetchone()
+        if not user:
+            print("\nUser not found.")
+            return
 
-    # Check whether user exists
-    check_query = """
-        SELECT * FROM users
-        WHERE user_id = %s
-    """
+        # account_id exists after the web-app migration. Checking the column
+        # keeps the original console usable on an unmigrated legacy database.
+        cursor.execute("SHOW COLUMNS FROM users LIKE %s", ("account_id",))
+        has_account_column = cursor.fetchone() is not None
+        if has_account_column:
+            cursor.execute("SELECT account_id FROM users WHERE user_id = %s", (user_id,))
+            ownership = cursor.fetchone()
+            if ownership and ownership[0] is not None:
+                conn.rollback()
+                print("\nThis profile belongs to a FitTrack web account. No changes were made.")
+                print("The account owner must delete it from the website Settings page.")
+                return
 
-    cursor.execute(check_query, (user_id,))
-    user = cursor.fetchone()
-
-    if not user:
-
-        print("\nUser not found.")
-
-    else:
+        # Finish the display-only read transaction before waiting for input.
+        # Ownership is checked again under a row lock immediately before writes.
+        conn.commit()
 
         print("\n===== User Found =====")
         print("Name:", user[1])
         print("Age:", user[2])
         print("Weight:", user[5], "kg")
-
-        confirmation = input(
-            "Are you sure you want to delete this user? (yes/no): "
-        )
-
-        if confirmation.lower() == "yes":
-
-            # Delete fitness records first
-            delete_records_query = """
-                DELETE FROM fitness_records
-                WHERE user_id = %s
-            """
-
-            cursor.execute(delete_records_query, (user_id,))
-
-            # Delete user
-            delete_user_query = """
-                DELETE FROM users
-                WHERE user_id = %s
-            """
-
-            cursor.execute(delete_user_query, (user_id,))
-
-            connection.commit()
-
-            print("\nUser deleted successfully!")
-
-        else:
+        confirmation = input("Are you sure you want to delete this user? (yes/no): ")
+        if confirmation.lower() != "yes":
+            conn.rollback()
             print("\nDelete operation cancelled.")
+            return
 
-    cursor.close()
-    connection.close()
+        try:
+            if has_account_column:
+                cursor.execute("SELECT account_id FROM users WHERE user_id = %s FOR UPDATE", (user_id,))
+                locked_profile = cursor.fetchone()
+                if locked_profile is None:
+                    conn.rollback()
+                    print("\nUser not found. No changes were made.")
+                    return
+                if locked_profile[0] is not None:
+                    conn.rollback()
+                    print("\nThis profile now belongs to a FitTrack web account. No changes were made.")
+                    print("The account owner must delete it from the website Settings page.")
+                    return
+            else:
+                cursor.execute("SELECT user_id FROM users WHERE user_id = %s FOR UPDATE", (user_id,))
+                if cursor.fetchone() is None:
+                    conn.rollback()
+                    print("\nUser not found. No changes were made.")
+                    return
+
+            cursor.execute("DELETE FROM fitness_records WHERE user_id = %s", (user_id,))
+            cursor.execute("DELETE FROM users WHERE user_id = %s", (user_id,))
+            conn.commit()
+            print("\nUser deleted successfully!")
+        except Exception:
+            conn.rollback()
+            print("\nThe user could not be deleted because related records still exist. No changes were made.")
+    except Exception:
+        conn.rollback()
+        print("\nThe user could not be deleted. No changes were made.")
+    finally:
+        cursor.close()
+        conn.close()
 
 
 # ==========================================
@@ -316,32 +329,13 @@ def add_fitness_record():
 
         record_date = input("Enter date (YYYY-MM-DD): ").strip()
 
-        steps = int(input("Enter steps: "))
+        steps = _read_number("Enter steps: ", "Steps", 0, 200000, integer=True)
+        distance = _read_number("Enter distance in km: ", "Distance", 0, 1000)
+        workout_minutes = _read_number("Enter workout minutes: ", "Workout minutes", 0, 1440, integer=True)
+        calories_burned = _read_number("Enter calories burned: ", "Calories burned", 0, 10000)
 
-        if steps < 0:
-            print("\nSteps cannot be negative.")
-            return
-
-        distance = float(input("Enter distance in km: "))
-
-        if distance < 0:
-            print("\nDistance cannot be negative.")
-            return
-
-        workout_minutes = int(input("Enter workout minutes: "))
-
-        if workout_minutes < 0:
-            print("\nWorkout minutes cannot be negative.")
-            return
-
-        calories_burned = float(input("Enter calories burned: "))
-
-        if calories_burned < 0:
-            print("\nCalories burned cannot be negative.")
-            return
-
-    except ValueError:
-        print("\nPlease enter valid values.")
+    except ValueError as error:
+        print(f"\n{error}")
         return
 
     connection = create_connection()
@@ -442,48 +436,53 @@ def view_user_fitness_records():
 # ==========================================
 # Main Menu
 # ==========================================
-while True:
+def main():
+    while True:
 
-    print("\n========== FITTRACK ==========")
-    print("1. Add User")
-    print("2. View Users")
-    print("3. Search User")
-    print("4. Update User")
-    print("5. Delete User")
-    print("6. Add Fitness Record")
-    print("7. View All Fitness Records")
-    print("8. View User Fitness Records")
-    print("9. Exit")
+        print("\n========== FITTRACK ==========")
+        print("1. Add User")
+        print("2. View Users")
+        print("3. Search User")
+        print("4. Update User")
+        print("5. Delete User")
+        print("6. Add Fitness Record")
+        print("7. View All Fitness Records")
+        print("8. View User Fitness Records")
+        print("9. Exit")
 
-    choice = input("Enter your choice: ")
+        choice = input("Enter your choice: ")
 
-    if choice == "1":
-        add_user()
+        if choice == "1":
+            add_user()
 
-    elif choice == "2":
-        view_users()
+        elif choice == "2":
+            view_users()
 
-    elif choice == "3":
-        search_user()
+        elif choice == "3":
+            search_user()
 
-    elif choice == "4":
-        update_user()
+        elif choice == "4":
+            update_user()
 
-    elif choice == "5":
-        delete_user()
+        elif choice == "5":
+            delete_user()
 
-    elif choice == "6":
-        add_fitness_record()
+        elif choice == "6":
+            add_fitness_record()
 
-    elif choice == "7":
-        view_fitness_records()
+        elif choice == "7":
+            view_fitness_records()
 
-    elif choice == "8":
-        view_user_fitness_records()
+        elif choice == "8":
+            view_user_fitness_records()
 
-    elif choice == "9":
-        print("\nThank you for using FitTrack!")
-        break
+        elif choice == "9":
+            print("\nThank you for using FitTrack!")
+            break
 
-    else:
-        print("\nInvalid choice. Please try again.")
+        else:
+            print("\nInvalid choice. Please try again.")
+
+
+if __name__ == "__main__":
+    main()

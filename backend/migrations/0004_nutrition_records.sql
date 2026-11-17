@@ -1,0 +1,25 @@
+CREATE TABLE IF NOT EXISTS nutrition_records (
+    record_id INT NOT NULL AUTO_INCREMENT,
+    user_id INT NOT NULL,
+    food_name VARCHAR(120) NOT NULL,
+    meal_type VARCHAR(16) NOT NULL,
+    quantity DECIMAL(10,3) NOT NULL,
+    unit VARCHAR(32) NOT NULL,
+    calories DECIMAL(10,2) NOT NULL,
+    protein_g DECIMAL(9,2) NOT NULL DEFAULT 0,
+    carbohydrates_g DECIMAL(9,2) NOT NULL DEFAULT 0,
+    fat_g DECIMAL(9,2) NOT NULL DEFAULT 0,
+    entry_date DATE NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (record_id),
+    KEY ix_nutrition_records_user_date_meal (user_id, entry_date, meal_type, record_id),
+    CONSTRAINT fk_nutrition_records_user FOREIGN KEY (user_id)
+        REFERENCES users (user_id) ON DELETE RESTRICT,
+    CONSTRAINT chk_nutrition_records_meal CHECK (meal_type IN ('breakfast','lunch','dinner','snack')),
+    CONSTRAINT chk_nutrition_records_quantity CHECK (quantity > 0 AND quantity <= 10000),
+    CONSTRAINT chk_nutrition_records_calories CHECK (calories >= 0 AND calories <= 10000),
+    CONSTRAINT chk_nutrition_records_protein CHECK (protein_g >= 0 AND protein_g <= 1000),
+    CONSTRAINT chk_nutrition_records_carbohydrates CHECK (carbohydrates_g >= 0 AND carbohydrates_g <= 1000),
+    CONSTRAINT chk_nutrition_records_fat CHECK (fat_g >= 0 AND fat_g <= 1000)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

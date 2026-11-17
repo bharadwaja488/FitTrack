@@ -1,8 +1,11 @@
 # FitTrack – Fitness & Health Tracker
 
-FitTrack is a console-based fitness and health tracking application built using Python and MySQL.
+FitTrack contains two applications:
 
-The application allows users to manage their basic health information and record their daily fitness activities.
+- **Python/MySQL console application:** the original command-line program in `main.py` and `database.py` for managing users and fitness records. Its features and source are preserved below.
+- **Flask/React web application:** a personal account-based app for goals, health metrics, activity tracking, history, and account settings. See [README_WEB.md](README_WEB.md) for web setup and configuration.
+
+## Original console application
 
 ## Features
 
@@ -59,7 +62,9 @@ Stores:
 
 The `user_id` connects fitness records with the corresponding user.
 
-## Project Structure
+## Original console project structure
+
+The current repository also contains `backend/` (Flask API and migrations), `frontend/` (React/Vite), and `README_WEB.md`. The real `.env` is local configuration and must not be committed; `.env.example` is the safe local template.
 
 ```text
 FitTrack/
