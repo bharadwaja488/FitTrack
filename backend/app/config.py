@@ -81,7 +81,13 @@ def validate_security_config(config):
     storage_uri = str(config.get("RATELIMIT_STORAGE_URI", ""))
     try:
         storage = urlsplit(storage_uri)
-        valid_rate_limit_storage = storage.scheme.lower() == "rediss" and bool(storage.hostname)
+        storage.port  # Validate malformed ports without exposing the URI.
+        valid_rate_limit_storage = (
+            storage.scheme.lower() == "rediss"
+            and bool(storage.hostname)
+            and not storage.query
+            and not storage.fragment
+        )
     except ValueError:
         valid_rate_limit_storage = False
     if not valid_rate_limit_storage:
@@ -89,9 +95,11 @@ def validate_security_config(config):
     try:
         trusted_proxy_hops = int(config.get("TRUSTED_PROXY_HOPS", 0))
     except (TypeError, ValueError):
-        trusted_proxy_hops = 0
-    if not 1 <= trusted_proxy_hops <= 10:
-        raise RuntimeError("Production requires TRUSTED_PROXY_HOPS from 1 to 10 for the configured proxy chain.")
+        trusted_proxy_hops = -1
+    if trusted_proxy_hops != 0:
+        raise RuntimeError(
+            "Production requires TRUSTED_PROXY_HOPS=0; X-Forwarded-For and X-Forwarded-Proto are not trusted."
+        )
     mail_fields = (config.get("MAIL_SERVER"), config.get("MAIL_USERNAME"), config.get("MAIL_PASSWORD"))
     if any(mail_fields) and not all(mail_fields):
         raise RuntimeError("Production mail configuration requires MAIL_SERVER, MAIL_USERNAME, and MAIL_PASSWORD together.")
@@ -130,7 +138,7 @@ def frontend_origins(environment, frontend_url, configured_origins):
             "DB_READ_TIMEOUT": 20,
             "DB_WRITE_TIMEOUT": 20,
             "RATELIMIT_STORAGE_URI": "rediss://rate-limit.example.com/0",
-            "TRUSTED_PROXY_HOPS": 1,
+            "TRUSTED_PROXY_HOPS": 0,
             "MAIL_ENABLED": False,
             "MAIL_SERVER": "",
             "MAIL_USERNAME": "",
@@ -160,6 +168,7 @@ class Config:
     DB_WRITE_TIMEOUT = int(os.getenv("DB_WRITE_TIMEOUT", "20"))
     RATELIMIT_STORAGE_URI = os.getenv("RATELIMIT_STORAGE_URI", "memory://")
     TRUSTED_PROXY_HOPS = int(os.getenv("TRUSTED_PROXY_HOPS", "0"))
+    RENDER_SERVICE = os.getenv("RENDER", "").strip().lower() == "true"
     # Local development remains convenient; production must supply a stable key.
     SECRET_KEY = os.getenv("SECRET_KEY") or (None if IS_PRODUCTION else secrets.token_hex(32))
     _FRONTEND_URL = os.getenv("FRONTEND_URL") or os.getenv("FRONTEND_ORIGIN")

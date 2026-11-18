@@ -3,7 +3,6 @@ from flask_cors import CORS
 from mysql.connector import Error
 from datetime import timedelta
 from werkzeug.exceptions import HTTPException
-from werkzeug.middleware.proxy_fix import ProxyFix
 
 from .config import Config, validate_security_config
 from .extensions import limiter, oauth
@@ -20,12 +19,6 @@ def create_app():
     app = Flask(__name__)
     app.config.from_object(Config)
     validate_security_config(app.config)
-    if app.config["TRUSTED_PROXY_HOPS"]:
-        app.wsgi_app = ProxyFix(
-            app.wsgi_app,
-            x_for=app.config["TRUSTED_PROXY_HOPS"],
-            x_proto=1,
-        )
     app.permanent_session_lifetime = timedelta(seconds=app.config["PERMANENT_SESSION_LIFETIME"])
 
     @app.after_request

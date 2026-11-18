@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import create_app
 from app.config import Config, frontend_origins, resolve_environment, validate_security_config
+from app.extensions import get_client_ip
 
 
 def production_config(**overrides):
@@ -31,7 +32,7 @@ def production_config(**overrides):
         "DB_READ_TIMEOUT": 20,
         "DB_WRITE_TIMEOUT": 20,
         "RATELIMIT_STORAGE_URI": "rediss://rate-limit.example.com/0",
-        "TRUSTED_PROXY_HOPS": 1,
+        "TRUSTED_PROXY_HOPS": 0,
         "MAIL_ENABLED": False,
         "MAIL_USE_TLS": True,
         "MAIL_SERVER": "",
@@ -50,6 +51,22 @@ def test_production_config_accepts_stable_key_and_secure_cookie():
     validate_security_config(production_config())
 
 
+def test_production_config_accepts_no_proxy_hop_setting_as_zero():
+    config = production_config()
+    config.pop("TRUSTED_PROXY_HOPS")
+    validate_security_config(config)
+
+
+def test_production_config_accepts_explicit_zero_proxy_hops():
+    validate_security_config(production_config(TRUSTED_PROXY_HOPS=0))
+
+
+def test_valid_upstash_rediss_url_is_accepted():
+    validate_security_config(production_config(
+        RATELIMIT_STORAGE_URI="rediss://default:encoded%2Fpassword@cache.example.com:6379/0"
+    ))
+
+
 @pytest.mark.parametrize("overrides,message", [
     ({"SECRET_KEY": None}, "SECRET_KEY"),
     ({"SECRET_KEY": "short"}, "SECRET_KEY"),
@@ -64,7 +81,13 @@ def test_production_config_accepts_stable_key_and_secure_cookie():
     ({"RATELIMIT_STORAGE_URI": "redis://cache.example.com/0"}, "shared TLS Redis"),
     ({"RATELIMIT_STORAGE_URI": "memcached://cache.example.com:11211"}, "shared TLS Redis"),
     ({"RATELIMIT_STORAGE_URI": "rediss:///0"}, "shared TLS Redis"),
-    ({"TRUSTED_PROXY_HOPS": 0}, "TRUSTED_PROXY_HOPS"),
+    ({"RATELIMIT_STORAGE_URI": "rediss://cache.example.com/0?ssl_cert_reqs=none"}, "shared TLS Redis"),
+    ({"RATELIMIT_STORAGE_URI": "rediss://cache.example.com/0?ssl_check_hostname=false"}, "shared TLS Redis"),
+    ({"RATELIMIT_STORAGE_URI": "rediss://cache.example.com/0#ssl_cert_reqs=none"}, "shared TLS Redis"),
+    ({"RATELIMIT_STORAGE_URI": "rediss://cache.example.com:not-a-port/0"}, "shared TLS Redis"),
+    ({"TRUSTED_PROXY_HOPS": 1}, "TRUSTED_PROXY_HOPS=0"),
+    ({"TRUSTED_PROXY_HOPS": -1}, "TRUSTED_PROXY_HOPS=0"),
+    ({"TRUSTED_PROXY_HOPS": "invalid"}, "TRUSTED_PROXY_HOPS=0"),
     ({"GOOGLE_CLIENT_ID": "client-id"}, "both client credentials"),
     ({"GOOGLE_CLIENT_ID": "client-id", "GOOGLE_CLIENT_SECRET": "secret",
       "GOOGLE_REDIRECT_URI": "https://api.example.com/api/auth/google/callback"}, "proxied callback URL"),
@@ -133,12 +156,78 @@ def test_production_origins_use_only_explicit_public_https_origins():
     validate_security_config(production_config(FRONTEND_ORIGINS=origins, FRONTEND_URL=origins[0]))
 
 
-def test_configured_proxy_hop_is_applied_before_rate_limit_ip_lookup(monkeypatch):
-    monkeypatch.setattr(Config, "TRUSTED_PROXY_HOPS", 1)
+@pytest.mark.parametrize("header", ["X-Forwarded-For", "X-Forwarded-Proto"])
+def test_client_ip_lookup_ignores_untrusted_forwarded_headers(header):
+    from flask import Flask
+
+    app = Flask(__name__)
+    app.config["RENDER_SERVICE"] = False
+    with app.test_request_context(
+        "/", headers={header: "198.51.100.77"}, environ_base={"REMOTE_ADDR": "192.0.2.10"},
+    ):
+        assert get_client_ip() == "192.0.2.10"
+
+
+@pytest.mark.parametrize("cf_header", [None, "not-an-ip", "198.51.100.77, 203.0.113.10"])
+def test_render_client_ip_falls_back_for_missing_or_invalid_cf_header(cf_header):
+    from flask import Flask
+
+    app = Flask(__name__)
+    app.config["RENDER_SERVICE"] = True
+    headers = {"X-Forwarded-For": "198.51.100.77"}
+    if cf_header is not None:
+        headers["CF-Connecting-IP"] = cf_header
+    with app.test_request_context(
+        "/", headers=headers, environ_base={"REMOTE_ADDR": "192.0.2.10"},
+    ):
+        assert get_client_ip() == "192.0.2.10"
+
+
+def test_render_client_ip_uses_cf_connecting_ip_and_ignores_xff():
+    from flask import Flask
+
+    app = Flask(__name__)
+    app.config["RENDER_SERVICE"] = True
+    with app.test_request_context(
+        "/",
+        headers={"CF-Connecting-IP": "203.0.113.10", "X-Forwarded-For": "198.51.100.77"},
+        environ_base={"REMOTE_ADDR": "192.0.2.10"},
+    ):
+        assert get_client_ip() == "203.0.113.10"
+
+
+def test_flask_startup_does_not_apply_proxyfix_or_trust_x_forwarded_proto():
+    from werkzeug.middleware.proxy_fix import ProxyFix
+
     app = create_app()
-    app.add_url_rule("/proxy-test", view_func=lambda: jsonify({"remote_addr": request.remote_addr}))
-    response = app.test_client().get("/proxy-test", headers={"X-Forwarded-For": "203.0.113.10"})
-    assert response.json["remote_addr"] == "203.0.113.10"
+    assert not isinstance(app.wsgi_app, ProxyFix)
+    app.add_url_rule("/api/proxy-policy-test", view_func=lambda: jsonify({"scheme": request.scheme}))
+    response = app.test_client().get(
+        "/api/proxy-policy-test",
+        headers={"X-Forwarded-For": "198.51.100.77", "X-Forwarded-Proto": "https"},
+    )
+    assert response.json["scheme"] == "http"
+
+
+def test_redis_storage_explicitly_enforces_tls_without_network(monkeypatch):
+    import socket
+    from limits.storage.redis import RedisStorage
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("Redis configuration test attempted a network connection")
+
+    monkeypatch.setattr(socket, "getaddrinfo", forbidden)
+    monkeypatch.setattr(socket, "create_connection", forbidden)
+    monkeypatch.setattr(socket.socket, "connect", forbidden)
+    monkeypatch.setattr(socket.socket, "connect_ex", forbidden)
+    storage = RedisStorage(
+        "rediss://default:placeholder@cache.example.com:6379/0",
+        ssl_cert_reqs="required",
+        ssl_check_hostname=True,
+    )
+    options = storage.storage.connection_pool.connection_kwargs
+    assert options["ssl_cert_reqs"] == "required"
+    assert options["ssl_check_hostname"] is True
 
 
 def test_application_startup_validates_production_settings(monkeypatch):

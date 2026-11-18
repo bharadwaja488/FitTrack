@@ -1,0 +1,64 @@
+services:
+  - type: web
+    name: fittrack-api-staging
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn --bind 0.0.0.0:$PORT run:app
+    healthCheckPath: /api/health
+    autoDeployTrigger: "off"
+    envVars:
+      - key: FITTRACK_ENV
+        value: production
+      - key: FLASK_DEBUG
+        value: "false"
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: DB_PORT
+        value: "4000"
+      - key: DB_NAME
+        value: fittrack_staging
+      - key: FITTRACK_EXPECTED_DB_NAME
+        value: fittrack_staging
+      - key: DB_SSL_VERIFY_CERT
+        value: "true"
+      - key: DB_SSL_VERIFY_IDENTITY
+        value: "true"
+      - key: DB_CONNECT_TIMEOUT
+        value: "5"
+      - key: DB_READ_TIMEOUT
+        value: "20"
+      - key: DB_WRITE_TIMEOUT
+        value: "20"
+      - key: SECRET_KEY
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: FRONTEND_ORIGINS
+        sync: false
+      - key: TRUSTED_PROXY_HOPS
+        value: "0"
+      - key: DB_HOST
+        sync: false
+      - key: FITTRACK_EXPECTED_DB_HOST
+        sync: false
+      - key: DB_USER
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: DB_SSL_CA
+        sync: false
+      - key: RATELIMIT_STORAGE_URI
+        sync: false
+      - key: MAIL_SERVER
+        sync: false
+      - key: MAIL_USERNAME
+        sync: false
+      - key: MAIL_PASSWORD
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REDIRECT_URI
+        sync: false
