@@ -10,8 +10,17 @@ def main():
     try:
         from app import create_app
         create_app()
-    except Exception:
-        # Avoid echoing configuration values or connector details into CI logs.
+    except Exception as error:
+        # ProductionConfigurationError contains only fixed, value-free diagnostics.
+        issues = getattr(error, "issues", None)
+        if (error.__class__.__name__ == "ProductionConfigurationError"
+                and isinstance(issues, (tuple, list))
+                and all(isinstance(issue, str) for issue in issues)):
+            print("Production configuration validation failed:", file=sys.stderr)
+            for issue in issues:
+                print(f"- {issue}", file=sys.stderr)
+            return 1
+        # Never print raw exceptions: connector/config parser details can contain credentials.
         print("Production configuration validation failed; verify required secret settings.", file=sys.stderr)
         return 1
     print("Production configuration validated; no database or Redis connection was attempted.")

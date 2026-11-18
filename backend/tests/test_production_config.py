@@ -7,7 +7,13 @@ from flask import jsonify, request
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import create_app
-from app.config import Config, frontend_origins, resolve_environment, validate_security_config
+from app.config import (
+    Config,
+    ProductionConfigurationError,
+    frontend_origins,
+    resolve_environment,
+    validate_security_config,
+)
 from app.extensions import get_client_ip
 
 
@@ -31,7 +37,7 @@ def production_config(**overrides):
         "DB_CONNECT_TIMEOUT": 5,
         "DB_READ_TIMEOUT": 20,
         "DB_WRITE_TIMEOUT": 20,
-        "RATELIMIT_STORAGE_URI": "rediss://rate-limit.example.com/0",
+        "RATELIMIT_STORAGE_URI": "rediss://default:test-placeholder@rate-limit.example.com:6379/0",
         "TRUSTED_PROXY_HOPS": 0,
         "MAIL_ENABLED": False,
         "MAIL_USE_TLS": True,
@@ -63,7 +69,13 @@ def test_production_config_accepts_explicit_zero_proxy_hops():
 
 def test_valid_upstash_rediss_url_is_accepted():
     validate_security_config(production_config(
-        RATELIMIT_STORAGE_URI="rediss://default:encoded%2Fpassword@cache.example.com:6379/0"
+        RATELIMIT_STORAGE_URI="rediss://default:encoded%2Fpassword@fittrack-staging.upstash.io:6379/0"
+    ))
+
+
+def test_valid_authenticated_upstash_url_without_database_path_is_accepted():
+    validate_security_config(production_config(
+        RATELIMIT_STORAGE_URI="rediss://default:encoded%2Fpassword@fittrack-staging.upstash.io:6379"
     ))
 
 
@@ -74,29 +86,56 @@ def test_valid_upstash_rediss_url_is_accepted():
     ({"SECRET_KEY": "a" * 40}, "high-entropy"),
     ({"SESSION_COOKIE_SECURE": False}, "COOKIE_SECURE=true"),
     ({"DEBUG": True}, "FLASK_DEBUG=false"),
-    ({"DB_PASSWORD": ""}, "DB_HOST, DB_USER, DB_PASSWORD, and DB_NAME"),
-    ({"DB_PORT": "not-a-port"}, "valid DB_PORT"),
+    ({"DB_PASSWORD": ""}, "DB_PASSWORD"),
+    ({"DB_PORT": "not-a-port"}, "DB_PORT"),
     ({"DB_SSL_VERIFY_IDENTITY": False}, "verified TLS"),
-    ({"RATELIMIT_STORAGE_URI": "memory://"}, "shared TLS Redis"),
-    ({"RATELIMIT_STORAGE_URI": "redis://cache.example.com/0"}, "shared TLS Redis"),
-    ({"RATELIMIT_STORAGE_URI": "memcached://cache.example.com:11211"}, "shared TLS Redis"),
-    ({"RATELIMIT_STORAGE_URI": "rediss:///0"}, "shared TLS Redis"),
-    ({"RATELIMIT_STORAGE_URI": "rediss://cache.example.com/0?ssl_cert_reqs=none"}, "shared TLS Redis"),
-    ({"RATELIMIT_STORAGE_URI": "rediss://cache.example.com/0?ssl_check_hostname=false"}, "shared TLS Redis"),
-    ({"RATELIMIT_STORAGE_URI": "rediss://cache.example.com/0#ssl_cert_reqs=none"}, "shared TLS Redis"),
-    ({"RATELIMIT_STORAGE_URI": "rediss://cache.example.com:not-a-port/0"}, "shared TLS Redis"),
-    ({"TRUSTED_PROXY_HOPS": 1}, "TRUSTED_PROXY_HOPS=0"),
-    ({"TRUSTED_PROXY_HOPS": -1}, "TRUSTED_PROXY_HOPS=0"),
-    ({"TRUSTED_PROXY_HOPS": "invalid"}, "TRUSTED_PROXY_HOPS=0"),
-    ({"GOOGLE_CLIENT_ID": "client-id"}, "both client credentials"),
+    ({"RATELIMIT_STORAGE_URI": ""}, "RATELIMIT_STORAGE_URI"),
+    ({"RATELIMIT_STORAGE_URI": "memory://"}, "RATELIMIT_STORAGE_URI"),
+    ({"RATELIMIT_STORAGE_URI": "redis://default:token@cache.example.com:6379/0"}, "RATELIMIT_STORAGE_URI"),
+    ({"RATELIMIT_STORAGE_URI": "memcached://cache.example.com:11211"}, "RATELIMIT_STORAGE_URI"),
+    ({"RATELIMIT_STORAGE_URI": "rediss:///0"}, "RATELIMIT_STORAGE_URI"),
+    ({"RATELIMIT_STORAGE_URI": "rediss://cache.example.com:6379/0"}, "RATELIMIT_STORAGE_URI"),
+    ({"RATELIMIT_STORAGE_URI": "rediss://default:@cache.example.com:6379/0"}, "RATELIMIT_STORAGE_URI"),
+    ({"RATELIMIT_STORAGE_URI": "rediss://:token@cache.example.com:6379/0"}, "RATELIMIT_STORAGE_URI"),
+    ({"RATELIMIT_STORAGE_URI": "rediss://default:token@cache.example.com/0"}, "RATELIMIT_STORAGE_URI"),
+    ({"RATELIMIT_STORAGE_URI": "rediss://default:token@cache.example.com:not-a-port/0"}, "RATELIMIT_STORAGE_URI"),
+    ({"RATELIMIT_STORAGE_URI": "rediss://default:token@cache.example.com:6379/invalid"}, "RATELIMIT_STORAGE_URI"),
+    ({"RATELIMIT_STORAGE_URI": "rediss://default:token@%20:6379/0"}, "RATELIMIT_STORAGE_URI"),
+    ({"RATELIMIT_STORAGE_URI": "rediss://default:token@bad_host:6379/0"}, "RATELIMIT_STORAGE_URI"),
+    ({"RATELIMIT_STORAGE_URI": "rediss://default:token@bad..host:6379/0"}, "RATELIMIT_STORAGE_URI"),
+    ({"RATELIMIT_STORAGE_URI": "rediss://default:token@bad-.host:6379/0"}, "RATELIMIT_STORAGE_URI"),
+    ({"RATELIMIT_STORAGE_URI": "rediss://default:token@cache.example.com:6379/01"}, "RATELIMIT_STORAGE_URI"),
+    ({"RATELIMIT_STORAGE_URI": "rediss://default:token@cache.example.com:6379/1"}, "RATELIMIT_STORAGE_URI"),
+    ({"RATELIMIT_STORAGE_URI": "rediss://default:token@cache.example.com:6379/0?ssl_cert_reqs=none"}, "RATELIMIT_STORAGE_URI"),
+    ({"RATELIMIT_STORAGE_URI": "rediss://default:token@cache.example.com:6379/0?ssl_check_hostname=false"}, "RATELIMIT_STORAGE_URI"),
+    ({"RATELIMIT_STORAGE_URI": "rediss://default:token@cache.example.com:6379/0#ssl_cert_reqs=none"}, "RATELIMIT_STORAGE_URI"),
+    ({"TRUSTED_PROXY_HOPS": 1}, "TRUSTED_PROXY_HOPS"),
+    ({"TRUSTED_PROXY_HOPS": -1}, "TRUSTED_PROXY_HOPS"),
+    ({"TRUSTED_PROXY_HOPS": "invalid"}, "TRUSTED_PROXY_HOPS"),
+    ({"GOOGLE_CLIENT_ID": "client-id"}, "GOOGLE_CLIENT_SECRET"),
     ({"GOOGLE_CLIENT_ID": "client-id", "GOOGLE_CLIENT_SECRET": "secret",
       "GOOGLE_REDIRECT_URI": "https://api.example.com/api/auth/google/callback"}, "proxied callback URL"),
     ({"MAIL_ENABLED": True, "MAIL_USE_TLS": False}, "MAIL_USE_TLS=true"),
-    ({"MAIL_SERVER": "smtp.example.com"}, "MAIL_SERVER, MAIL_USERNAME, and MAIL_PASSWORD together"),
+    ({"MAIL_SERVER": "smtp.example.com"}, "MAIL_USERNAME, MAIL_PASSWORD"),
 ])
 def test_production_config_fails_closed_without_required_settings(overrides, message):
     with pytest.raises(RuntimeError, match=message):
         validate_security_config(production_config(**overrides))
+
+
+def test_production_config_collects_actionable_issues_without_values():
+    sensitive_value = "do-not-print-this-secret-value"
+    with pytest.raises(ProductionConfigurationError) as raised:
+        validate_security_config(production_config(
+            DB_PASSWORD="",
+            RATELIMIT_STORAGE_URI=f"rediss://default:{sensitive_value}@cache.example.com:6379/0?token={sensitive_value}",
+        ))
+
+    report = " ".join(raised.value.issues)
+    assert "DB_PASSWORD" in report
+    assert "RATELIMIT_STORAGE_URI" in report
+    assert sensitive_value not in report
+    assert "@cache.example.com" not in report
 
 
 def test_development_config_does_not_require_production_overrides():
@@ -211,7 +250,8 @@ def test_flask_startup_does_not_apply_proxyfix_or_trust_x_forwarded_proto():
 
 def test_redis_storage_explicitly_enforces_tls_without_network(monkeypatch):
     import socket
-    from limits.storage.redis import RedisStorage
+    from flask import Flask
+    from flask_limiter import Limiter
 
     def forbidden(*_args, **_kwargs):
         pytest.fail("Redis configuration test attempted a network connection")
@@ -220,12 +260,15 @@ def test_redis_storage_explicitly_enforces_tls_without_network(monkeypatch):
     monkeypatch.setattr(socket, "create_connection", forbidden)
     monkeypatch.setattr(socket.socket, "connect", forbidden)
     monkeypatch.setattr(socket.socket, "connect_ex", forbidden)
-    storage = RedisStorage(
-        "rediss://default:placeholder@cache.example.com:6379/0",
-        ssl_cert_reqs="required",
-        ssl_check_hostname=True,
+    test_limiter = Limiter(
+        key_func=lambda: "test-client",
+        storage_uri="rediss://default:placeholder@cache.example.com:6379/0",
+        storage_options={"ssl_cert_reqs": "required", "ssl_check_hostname": True},
     )
-    options = storage.storage.connection_pool.connection_kwargs
+    test_limiter.init_app(Flask(__name__))
+    options = test_limiter.storage.storage.connection_pool.connection_kwargs
+    assert options["username"] == "default"
+    assert options["password"] == "placeholder"
     assert options["ssl_cert_reqs"] == "required"
     assert options["ssl_check_hostname"] is True
 
