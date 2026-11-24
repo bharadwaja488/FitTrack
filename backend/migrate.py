@@ -592,7 +592,7 @@ def _object_state(cur, spec):
         rows = _fetchall(cur, "SELECT INDEX_NAME,NON_UNIQUE,SEQ_IN_INDEX,COLUMN_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=%s AND INDEX_NAME=%s ORDER BY SEQ_IN_INDEX", (spec.table, spec.name))
         if not rows:
             return False
-        actual = (bool(rows[0]["NON_UNIQUE"]), tuple(row["COLUMN_NAME"].lower() for row in rows))
+        actual = (bool(int(rows[0]["NON_UNIQUE"])), tuple(row["COLUMN_NAME"].lower() for row in rows))
         return _require_match(spec, actual, rows)
     if spec.kind == "foreign_key":
         if not _table_exists(cur, spec.table):
